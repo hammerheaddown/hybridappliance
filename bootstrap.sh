@@ -155,52 +155,6 @@ UNIT
   echo "[hybridappliance] noVNC services installed (will start with the next graphical session)."
 fi
 
-# ─── 6. PulseAudio TCP module (for REMOTE tab audio spot-check) ───────────
-# The dockerized admin runs an on-demand ffmpeg to capture the kiosk's
-# HDMI audio so broadcasters can hear what the TV is playing during a
-# remote-view check. ffmpeg lives in the container; PulseAudio lives on
-# the host. They bridge via TCP on port 4713 (the Docker bridge gateway
-# resolves to host.docker.internal inside the container).
-#
-# Bind 0.0.0.0 with auth-anonymous so the Docker bridge IP can reach it.
-# UFW rule below restricts external access — only Docker subnets get in.
-#
-# Set PULSE_TCP_SKIP=1 in env to bypass (e.g. headless boxes that don't
-# play the kiosk locally and so don't need the audio feature).
-if [[ "${PULSE_TCP_SKIP:-}" != "1" ]]; then
-  echo "[hybridappliance] Configuring PulseAudio TCP listener (for REMOTE tab audio)..."
-  PULSE_USER="${PULSE_USER:-$(getent passwd 1000 | cut -d: -f1)}"
-  if [[ -z "$PULSE_USER" ]]; then
-    echo "[hybridappliance] WARNING: no autologin user at UID 1000 — skipping PulseAudio config. Set PULSE_USER=<user> + re-run if you want REMOTE audio." >&2
-  else
-    PULSE_CFG_DIR="/home/$PULSE_USER/.config/pulse"
-    PULSE_CFG="$PULSE_CFG_DIR/default.pa"
-    mkdir -p "$PULSE_CFG_DIR"
-    if [[ ! -f "$PULSE_CFG" ]]; then
-      # Start from system default; we only append the TCP module line.
-      [[ -f /etc/pulse/default.pa ]] && cp /etc/pulse/default.pa "$PULSE_CFG" || \
-        echo ".include /etc/pulse/default.pa" > "$PULSE_CFG"
-    fi
-    if ! grep -q "module-native-protocol-tcp" "$PULSE_CFG"; then
-      cat >> "$PULSE_CFG" <<'PULSE_TCP'
-
-# HybridPlayout — REMOTE tab audio spot-check via dockerized admin
-load-module module-native-protocol-tcp listen=0.0.0.0 port=4713 auth-anonymous=1
-PULSE_TCP
-    fi
-    chown -R "$PULSE_USER":"$PULSE_USER" "$PULSE_CFG_DIR"
-
-    # UFW: allow port 4713 only from Docker's default bridge subnet.
-    # Adjust if your Docker daemon uses a non-default network.
-    if command -v ufw >/dev/null 2>&1; then
-      ufw allow from 172.17.0.0/16 to any port 4713 proto tcp || true
-      ufw allow from 172.18.0.0/16 to any port 4713 proto tcp || true
-      ufw deny  4713/tcp || true
-    fi
-    echo "[hybridappliance] PulseAudio TCP listener configured (reloads on next $PULSE_USER login or kiosk reboot)."
-  fi
-fi
-
 # ─── Summary ───────────────────────────────────────────────────────────────
 TS_FQDN="$(tailscale status --json 2>/dev/null | grep -oE '"DNSName":\s*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)\.".*/\1/' || true)"
 echo ""
